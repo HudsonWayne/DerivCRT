@@ -1,53 +1,47 @@
 import websocket
 import json
 import threading
+import time
 from datetime import datetime
 
-
 class DerivLiveStreamer:
-    def __init__(self, symbol, callback):
+    def __init__(self, symbol, on_candle_callback):
         self.symbol = symbol
-        self.callback = callback
+        self.on_candle_callback = on_candle_callback
         self.ws = None
 
     def _on_message(self, ws, message):
-        print("[DEBUG] Message received:", message)
         data = json.loads(message)
-
-        if data.get('msg_type') == 'ohlc':
-            ohlc = data['ohlc']  # Single candle dict
+        if data.get("msg_type") == "ohlc":
+            ohlc = data["ohlc"]
             candle = {
-                'timestamp': datetime.utcfromtimestamp(ohlc['epoch']),
-                'open': float(ohlc['open']),
-                'high': float(ohlc['high']),
-                'low': float(ohlc['low']),
-                'close': float(ohlc['close']),
+                "timestamp": datetime.fromtimestamp(ohlc["epoch"]),
+                "open": float(ohlc["open"]),
+                "high": float(ohlc["high"]),
+                "low": float(ohlc["low"]),
+                "close": float(ohlc["close"]),
             }
-            print(f"[DEBUG] Candle received: {candle}")
-            self.callback(candle)
-        else:
-            print(f"[DEBUG] Unhandled msg_type = {data.get('msg_type')}")
-            print("[DEBUG] Full response:", json.dumps(data, indent=2))
-
-    def _on_open(self, ws):
-        print("[DEBUG] WebSocket connection opened.")
-        request = {
-            "subscribe": 1,
-            "ticks_history": self.symbol,
-            "style": "candles",
-            "granularity": 60  # 1-minute candles
-        }
-        ws.send(json.dumps(request))
-        print("[DEBUG] Sent subscription request:", request)
+            self.on_candle_callback(candle)
 
     def _on_error(self, ws, error):
-        print(f"[ERROR] WebSocket error: {error}")
+        print(f"WebSocket error: {error}")
 
     def _on_close(self, ws, close_status_code, close_msg):
-        print(f"[INFO] WebSocket closed: {close_status_code}, {close_msg}")
+        print("WebSocket closed")
+
+    def _on_open(self, ws):
+        req = {
+            "ticks_history": self.symbol,
+            "end": "latest",
+            "count": "5000",
+            "granularity": 60,
+            "style": "candles",
+            "subscribe": 1
+        }
+        ws.send(json.dumps(req))
 
     def start(self):
-        print("[DEBUG] Starting WebSocket...")
+        websocket.enableTrace(False)
         self.ws = websocket.WebSocketApp(
             "wss://ws.binaryws.com/websockets/v3?app_id=1089",
             on_open=self._on_open,
@@ -55,8 +49,8 @@ class DerivLiveStreamer:
             on_error=self._on_error,
             on_close=self._on_close
         )
-        threading.Thread(target=self.ws.run_forever, daemon=True).start()
-
-    def stop(self):
-        if self.ws:
-            self.ws.close()
+        wst = threading.Thread(target=self.ws.run_forever)
+        wst.daemon = True
+        wst.start()
+        while True:
+            time.sleep(1)

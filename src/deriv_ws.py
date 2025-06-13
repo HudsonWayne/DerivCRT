@@ -3,6 +3,7 @@ import json
 import threading
 from datetime import datetime
 
+
 class DerivLiveStreamer:
     def __init__(self, symbol, callback):
         self.symbol = symbol
@@ -13,8 +14,8 @@ class DerivLiveStreamer:
         print("[DEBUG] Message received:", message)
         data = json.loads(message)
 
-        if data.get('msg_type') == 'candles':
-            ohlc = data['candles'][0]  # First (latest) candle in list
+        if data.get('msg_type') == 'ohlc':
+            ohlc = data['ohlc']  # Single candle dict
             candle = {
                 'timestamp': datetime.utcfromtimestamp(ohlc['epoch']),
                 'open': float(ohlc['open']),
@@ -31,11 +32,10 @@ class DerivLiveStreamer:
     def _on_open(self, ws):
         print("[DEBUG] WebSocket connection opened.")
         request = {
+            "subscribe": 1,
             "ticks_history": self.symbol,
-            "granularity": 60,            # 1-minute candles
             "style": "candles",
-            "end": "latest",
-            "subscribe": 1
+            "granularity": 60  # 1-minute candles
         }
         ws.send(json.dumps(request))
         print("[DEBUG] Sent subscription request:", request)

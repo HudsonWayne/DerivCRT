@@ -1,78 +1,113 @@
+import datetime
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
-from matplotlib.patches import Rectangle
-from deriv_ws import DerivLiveStreamer
-from pattern_detector import CRTPatternDetector
+import matplotlib.animation as animation
+import threading
+import queue
+import random
+import time
 
-class LiveCandlePlotter:
-    def __init__(self, symbol):
-        self.symbol = symbol
-        self.candles = []
-        self.detector = CRTPatternDetector(window_size=3)
+class LivePlotter:
+    def __init__(self):
+        self.candles = []  # Will hold dicts with keys: timestamp, open, high, low, close
+        self.data_queue = queue.Queue()
 
+        # Setup plot
         self.fig, self.ax = plt.subplots()
-        plt.ion()
-        self.fig.show()
-        self.fig.canvas.draw()
-
-    def on_new_candle(self, candle):
-        self.candles.append(candle)
-        if len(self.candles) > 50:
-            self.candles.pop(0)
-
-        pattern = self.detector.add_candle(candle)
-        self.draw_chart(pattern)
-
-    def draw_chart(self, pattern):
-        self.ax.clear()
-
-        dates = [mdates.date2num(c['timestamp']) for c in self.candles]
-        opens = [c['open'] for c in self.candles]
-        highs = [c['high'] for c in self.candles]
-        lows = [c['low'] for c in self.candles]
-        closes = [c['close'] for c in self.candles]
-
-        width = 0.0008
-        color_up = 'green'
-        color_down = 'red'
-
-        for i in range(len(self.candles)):
-            color = color_up if closes[i] >= opens[i] else color_down
-            self.ax.add_patch(Rectangle(
-                (dates[i] - width/2, min(opens[i], closes[i])),
-                width,
-                abs(opens[i] - closes[i]),
-                color=color,
-                alpha=0.8
-            ))
-            self.ax.plot([dates[i], dates[i]], [lows[i], highs[i]], color=color)
-
-        if pattern is not None:
-            idx = len(self.candles) - 1
-            candle = self.candles[idx]
-            self.ax.add_patch(Rectangle(
-                (dates[idx] - width/2, candle['low']),
-                width,
-                candle['high'] - candle['low'],
-                edgecolor='blue',
-                linewidth=2,
-                fill=False
-            ))
-            self.ax.text(dates[idx], candle['high'], f"CRT {pattern['type']}",
-                         color='blue', fontsize=10, fontweight='bold')
-
-        self.ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M:%S'))
-        self.ax.set_title(f"Live candles for {self.symbol}")
-        self.fig.autofmt_xdate()
+        self.ax.set_title("Live Candlestick Chart")
+        self.ax.set_xlabel("Time")
         self.ax.set_ylabel("Price")
-        self.fig.canvas.draw()
-        plt.pause(0.01)
 
-def main():
-    symbol = "R_75"
-    plotter = LiveCandlePlotter(symbol)
-    streamer = DerivLiveStreamer(symbol, plotter.on_new_candle)
-    streamer.start()
+        # Format date axis
+        self.ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M:%S'))
+        self.fig.autofmt_xdate()
+
+    def add_candle(self, candle):
+        """Add candle data (from websocket or simulator)"""
+        self.data_queue.put(candle)
+
+    def process_queue(self):
+        while not self.data_queue.empty():
+            candle = self.data_queue.get()
+            self.candles.append(candle)
+
+        # Keep only last 50 candles for performance
+        self.candles = self.candles[-50:]
+
+    def draw_chart(self):
+        self.ax.clear()
+        self.ax.set_title("Live Candlestick Chart")
+        self.ax.set_xlabel("Time")
+        self.ax.set_ylabel("Price")
+        self.ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M:%S'))
+        self.fig.autofmt_xdate()
+
+        if not self.candles:
+            return
+
+        dates = []
+        opens = []
+        highs = []
+        lows = []
+        closes = []
+
+        for c in self.candles:
+            ts = c['timestamp']
+            # Convert if needed
+            if isinstance(ts, (int, float)):
+                dt = datetime.datetime.fromtimestamp(ts)
+            else:
+                dt = ts  # already datetime
+            dates.append(mdates.date2num(dt))
+            opens.append(c['open'])
+            highs.append(c['high'])
+            lows.append(c['low'])
+            closes.append(c['close'])
+
+        width = 0.0005  # width for candle bodies in days
+
+        for i in range(len(dates)):
+            color = 'green' if closes[i] >= opens[i] else 'red'
+            # Draw candle body
+            self.ax.bar(dates[i], abs(closes[i] - opens[i]), width, bottom=min(opens[i], closes[i]), color=color)
+            # Draw wick (high-low line)
+            self.ax.vlines(dates[i], lows[i], highs[i], color=color)
+
+    def update(self, frame):
+        self.process_queue()
+        self.draw_chart()
+
+def simulate_data(plotter):
+    """Simulate candle data and send to plotter"""
+    base_price = 100000
+    while True:
+        now = datetime.datetime.now()
+        open_p = base_price + random.uniform(-50, 50)
+        close_p = open_p + random.uniform(-50, 50)
+        high_p = max(open_p, close_p) + random.uniform(0, 20)
+        low_p = min(open_p, close_p) - random.uniform(0, 20)
+
+        candle = {
+            'timestamp': now,
+            'open': open_p,
+            'high': high_p,
+            'low': low_p,
+            'close': close_p
+        }
+
+        plotter.add_candle(candle)
+        base_price = close_p
+        time.sleep(1)  # New candle every second (for demo)
+
+def run_plotter():
+    plotter = LivePlotter()
+
+    # Start data simulator in separate thread
+    t = threading.Thread(target=simulate_data, args=(plotter,), daemon=True)
+    t.start()
+
+    ani = animation.FuncAnimation(plotter.fig, plotter.update, interval=1000)
+    plt.show()
 
 if __name__ == "__main__":
-    main()
+    run_plotter()

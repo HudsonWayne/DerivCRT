@@ -1,21 +1,30 @@
+# src/pattern_detector.py
+
 class CRTPatternDetector:
-    def __init__(self, window_size=3):
-        self.window_size = window_size
+    def __init__(self):
         self.candles = []
 
     def add_candle(self, candle):
         self.candles.append(candle)
-        if len(self.candles) < self.window_size:
+        if len(self.candles) < 3:
             return None
-        if len(self.candles) > self.window_size:
+
+        if len(self.candles) > 3:
             self.candles.pop(0)
 
-        last = self.candles[-1]
-        prev_high = max(c["high"] for c in self.candles[:-1])
-        prev_low = min(c["low"] for c in self.candles[:-1])
+        c1, c2, c3 = self.candles
 
-        if last["close"] > prev_high:
-            return {"type": "Bullish", "candle": last}
-        elif last["close"] < prev_low:
-            return {"type": "Bearish", "candle": last}
+        # Phase logic (can refine later)
+        if (abs(c1['high'] - c1['low']) < 1 and
+            abs(c2['high'] - c2['low']) > 2 and
+            abs(c3['close'] - c1['high']) > 1):
+            
+            return {
+                "phase": "CRT",
+                "accumulation": c1,
+                "manipulation": c2,
+                "distribution": c3,
+                "type": "BREAKOUT_UP" if c3['close'] > c2['open'] else "BREAKOUT_DOWN"
+            }
+
         return None

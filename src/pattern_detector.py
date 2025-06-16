@@ -4,11 +4,6 @@ class CRTPatternDetector:
         self.candles = []
 
     def add_candle(self, candle):
-        """
-        Simple CRT detection:
-        - Bullish CRT breakout: last candle close > max high of previous candles in window
-        - Bearish CRT breakout: last candle close < min low of previous candles in window
-        """
         self.candles.append(candle)
         if len(self.candles) < self.window_size:
             return None
@@ -20,7 +15,7 @@ class CRTPatternDetector:
         prev_low = min(c["low"] for c in self.candles[:-1])
 
         if last["close"] > prev_high:
-            return {"type": "Bullish"}
+            return {"type": "Bullish", "candle": last}
         elif last["close"] < prev_low:
-            return {"type": "Bearish"}
+            return {"type": "Bearish", "candle": last}
         return None

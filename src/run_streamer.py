@@ -1,18 +1,50 @@
 from deriv_ws import DerivLiveStreamer
-from live_plot import start_plotting, add_candle
-from strategy import handle_candle
+from live_plot import LiveCandlePlot
+from pattern_detector import detect_crt_pattern
+import pandas as pd
 import threading
-import time
+
+candle_history = []
+crt_labels = []
 
 def on_new_candle(candle):
-    print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] O:{candle['open']} H:{candle['high']} L:{candle['low']} C:{candle['close']}")
-    handle_candle(candle)
-    add_candle(candle)
+    candle_history.append(candle)
+
+    # Keep only the latest 100 candles
+    if len(candle_history) > 100:
+        candle_history.pop(0)
+
+    # Detect CRT patterns
+    patterns, labels = detect_crt_pattern(candle_history)
+    crt_labels.clear()
+    crt_labels.extend(labels)
+
+    # Optional: print detected CRT pattern info
+    for pattern in patterns:
+        direction = pattern["direction"].upper()
+        print(
+            f"🚨 CRT {direction} @ {pd.to_datetime(pattern['time'], unit='s')} | "
+            f"Entry: {pattern['entry']:.2f} | SL: {pattern['sl']:.2f} | TP: {pattern['tp']:.2f}"
+        )
+
+def run_stream():
+    symbol = "R_75"
+    streamer = DerivLiveStreamer(
+        stream_symbol=symbol,
+        callback=on_new_candle,
+        granularity=14400  # 4-hour candles
+    )
+    streamer.start()
 
 if __name__ == "__main__":
-    def stream():
-        streamer = DerivLiveStreamer("R_75", on_new_candle, granularity=14400)
-        streamer.start()
+    # Initialize live plot with callbacks
+    plotter = LiveCandlePlot(
+        get_data_callback=lambda: pd.DataFrame(candle_history),
+        get_labels_callback=lambda: crt_labels
+    )
 
-    threading.Thread(target=stream, daemon=True).start()
-    start_plotting()
+    # Start the WebSocket stream in a background thread
+    threading.Thread(target=run_stream, daemon=True).start()
+
+    # Show the plot window (blocking)
+    plotter.show()

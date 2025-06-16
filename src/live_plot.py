@@ -1,64 +1,57 @@
 import matplotlib.pyplot as plt
-from matplotlib.animation import FuncAnimation
-import matplotlib.dates as mdates
+import matplotlib.animation as animation
+import pandas as pd
 from datetime import datetime
-import threading
 
-candles_buffer = []
-levels_buffer = []
-buffer_lock = threading.Lock()
+plt.style.use("dark_background")  # ✅ FIXED: Changed from 'seaborn-dark-palette'
 
-def add_candle(candle):
-    with buffer_lock:
-        candles_buffer.append(candle)
-        if len(candles_buffer) > 200:
-            candles_buffer.pop(0)
+class LiveCandlePlot:
+    def __init__(self, get_data_callback=None, get_labels_callback=None):
+        self.get_data_callback = get_data_callback
+        self.get_labels_callback = get_labels_callback
+        self.fig, self.ax = plt.subplots(figsize=(12, 6))
+        self.ani = animation.FuncAnimation(self.fig, self.update, interval=1000)
 
-def add_level(entry, sl, tp):
-    with buffer_lock:
-        levels_buffer.append((entry, sl, tp))
-        if len(levels_buffer) > 10:
-            levels_buffer.pop(0)
+    def update(self, frame):
+        self.ax.clear()
 
-def update_plot(frame):
-    with buffer_lock:
-        if not candles_buffer:
+        if self.get_data_callback is None:
             return
 
-        timestamps = [c["timestamp"] for c in candles_buffer]
-        dates = mdates.date2num(timestamps)
+        df = self.get_data_callback()
+        if df.empty:
+            return
 
-        fig.clf()
-        ax = fig.add_subplot(1, 1, 1)
+        # Convert epoch to datetime
+        df["time"] = pd.to_datetime(df["epoch"], unit="s")
 
-        for i in range(len(candles_buffer)):
-            c = candles_buffer[i]
-            color = "green" if c["close"] >= c["open"] else "red"
-            ax.plot([dates[i], dates[i]], [c["low"], c["high"]], color=color)
-            ax.add_patch(
-                plt.Rectangle(
-                    (dates[i] - 0.1, min(c["open"], c["close"])),
-                    0.2,
-                    abs(c["close"] - c["open"]),
-                    color=color
-                )
-            )
+        # Plot candlesticks
+        for i in range(len(df)):
+            o = df.iloc[i]["open"]
+            h = df.iloc[i]["high"]
+            l = df.iloc[i]["low"]
+            c = df.iloc[i]["close"]
+            t = df.iloc[i]["time"]
+            color = "green" if c >= o else "red"
+            self.ax.plot([t, t], [l, h], color=color, linewidth=1.5)
+            self.ax.plot([t, t], [o, c], color=color, linewidth=6)
 
-        # Plot SL/TP lines
-        for entry, sl, tp in levels_buffer:
-            ax.axhline(y=entry, color="blue", linestyle="--", label="Entry")
-            ax.axhline(y=sl, color="orange", linestyle="--", label="SL")
-            ax.axhline(y=tp, color="purple", linestyle="--", label="TP")
+        # Optional: annotate patterns like Accumulation, Manipulation, Distribution
+        if self.get_labels_callback:
+            labels = self.get_labels_callback()
+            for lbl in labels:
+                idx = lbl["index"]
+                text = lbl["label"]
+                if idx < len(df):
+                    candle_time = df.iloc[idx]["time"]
+                    candle_close = df.iloc[idx]["close"]
+                    self.ax.text(candle_time, candle_close, text, fontsize=9, color='yellow', ha='center')
 
-        ax.set_title("🔴 Bearish | 🟢 Bullish | CRT Live 4H Candles")
-        ax.set_xlabel("Time")
-        ax.set_ylabel("Price")
-        ax.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d %H:%M"))
-        fig.autofmt_xdate()
-        ax.grid(True)
+        self.ax.set_title("Live CRT Candlestick Chart (4H)")
+        self.ax.set_xlabel("Time")
+        self.ax.set_ylabel("Price")
+        self.ax.grid(True)
 
-def start_plotting():
-    global fig
-    fig = plt.figure()
-    ani = FuncAnimation(fig, update_plot, interval=3000)
-    plt.show()
+    def show(self):
+        plt.tight_layout()
+        plt.show()

@@ -1,30 +1,39 @@
-# src/pattern_detector.py
+# pattern_detector.py
 
-class CRTPatternDetector:
-    def __init__(self):
-        self.candles = []
+def detect_crt_pattern(candles):
+    patterns = []
+    labels = []
+    if len(candles) < 3:
+        return patterns, labels
 
-    def add_candle(self, candle):
-        self.candles.append(candle)
-        if len(self.candles) < 3:
-            return None
+    for i in range(2, len(candles)):
+        c1 = candles[i - 2]
+        c2 = candles[i - 1]
+        c3 = candles[i]
 
-        if len(self.candles) > 3:
-            self.candles.pop(0)
+        # Detect a simple Accumulation → Manipulation → Distribution pattern
+        if (
+            c1["high"] - c1["low"] < 2  # low range
+            and c2["high"] > c1["high"] + 1  # manipulation up
+            and c3["close"] < c1["low"]  # distribution closes low
+        ):
+            entry = c3["close"]
+            sl = c2["high"]
+            tp = entry - (sl - entry) * 2
 
-        c1, c2, c3 = self.candles
+            patterns.append(
+                {
+                    "time": c3["epoch"],
+                    "entry": entry,
+                    "sl": sl,
+                    "tp": tp,
+                    "direction": "sell",
+                }
+            )
 
-        # Phase logic (can refine later)
-        if (abs(c1['high'] - c1['low']) < 1 and
-            abs(c2['high'] - c2['low']) > 2 and
-            abs(c3['close'] - c1['high']) > 1):
-            
-            return {
-                "phase": "CRT",
-                "accumulation": c1,
-                "manipulation": c2,
-                "distribution": c3,
-                "type": "BREAKOUT_UP" if c3['close'] > c2['open'] else "BREAKOUT_DOWN"
-            }
+            # record labels with index and phase name
+            labels.append((i - 2, "ACCUMULATION"))
+            labels.append((i - 1, "MANIPULATION"))
+            labels.append((i, "DISTRIBUTION"))
 
-        return None
+    return patterns, labels

@@ -1,61 +1,39 @@
 import websocket
 import json
 import threading
-import time
-from datetime import datetime
 
 class DerivLiveStreamer:
-    def __init__(self, symbol, on_candle_callback, granularity=60):
-        self.symbol = symbol
-        self.on_candle_callback = on_candle_callback
+    def __init__(self, stream_symbol, callback, granularity=60):
+        self.symbol = stream_symbol
+        self.callback = callback
         self.granularity = granularity
         self.ws = None
 
-    def _on_message(self, ws, message):
-        data = json.loads(message)
-        if data.get("msg_type") == "ohlc":
-            ohlc = data["ohlc"]
-            candle = {
-                "timestamp": datetime.fromtimestamp(ohlc["epoch"]),
-                "open": float(ohlc["open"]),
-                "high": float(ohlc["high"]),
-                "low": float(ohlc["low"]),
-                "close": float(ohlc["close"]),
-            }
-            self.on_candle_callback(candle)
-
-    def _on_error(self, ws, error):
-        print(f"[ERROR] WebSocket error: {error}")
-
-    def _on_close(self, ws, close_status_code, close_msg):
-        print("[INFO] WebSocket closed")
-
-    def _on_open(self, ws):
-        request = {
-            "ticks_history": self.symbol,
-            "end": "latest",
-            "count": 1,
-            "granularity": self.granularity,
-            "style": "candles",
-            "subscribe": 1
-        }
-        ws.send(json.dumps(request))
-
     def start(self):
-        websocket.enableTrace(False)
+        def on_message(ws, message):
+            data = json.loads(message)
+            if 'candles' in data:
+                for candle in data['candles']:
+                    self.callback({
+                        'epoch': candle['epoch'],
+                        'open': candle['open'],
+                        'high': candle['high'],
+                        'low': candle['low'],
+                        'close': candle['close']
+                    })
+
+        def on_open(ws):
+            ws.send(json.dumps({
+                "ticks_history": self.symbol,
+                "style": "candles",
+                "granularity": self.granularity,
+                "count": 100,
+                "subscribe": 1
+            }))
+
         self.ws = websocket.WebSocketApp(
             "wss://ws.binaryws.com/websockets/v3?app_id=1089",
-            on_open=self._on_open,
-            on_message=self._on_message,
-            on_error=self._on_error,
-            on_close=self._on_close
+            on_message=on_message,
+            on_open=on_open
         )
-        thread = threading.Thread(target=self.ws.run_forever)
-        thread.daemon = True
-        thread.start()
-        try:
-            while True:
-                time.sleep(1)
-        except KeyboardInterrupt:
-            print("Stopped by user.")
-# self.ws.close()
+        threading.Thread(target=self.ws.run_forever).start()

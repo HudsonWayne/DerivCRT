@@ -11,7 +11,7 @@ def on_new_candle(candle):
 
 if __name__ == "__main__":
     def stream():
-        streamer = DerivLiveStreamer("R_100", on_new_candle, granularity=60)
+        streamer = DerivLiveStreamer("R_75", on_new_candle, granularity=14400)
         streamer.start()
 
     threading.Thread(target=stream, daemon=True).start()

@@ -5,17 +5,14 @@ import threading
 import time
 
 def on_new_candle(candle):
-    print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Open: {candle['open']}, High: {candle['high']}, Low: {candle['low']}, Close: {candle['close']}")
+    print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] O:{candle['open']} H:{candle['high']} L:{candle['low']} C:{candle['close']}")
     handle_candle(candle)
     add_candle(candle)
 
 if __name__ == "__main__":
-    # Start streaming in background thread
     def stream():
-        streamer = DerivLiveStreamer("R_100", on_new_candle)
+        streamer = DerivLiveStreamer("R_100", on_new_candle, granularity=60)
         streamer.start()
 
     threading.Thread(target=stream, daemon=True).start()
-
-    # Run plot in main thread
     start_plotting()

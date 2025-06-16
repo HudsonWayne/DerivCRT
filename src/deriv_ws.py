@@ -1,29 +1,61 @@
+import websocket
+import json
+import threading
+import time
+from datetime import datetime
+
 class DerivLiveStreamer:
-    def __init__(self, stream_symbol, callback):
-        self.symbol = stream_symbol
-        self.callback = callback
+    def __init__(self, symbol, on_candle_callback, granularity=60):
+        self.symbol = symbol
+        self.on_candle_callback = on_candle_callback
+        self.granularity = granularity
         self.ws = None
 
-    def start(self):
-        def on_message(ws, message):
-            data = json.loads(message)
-            if 'candles' in data:
-                candle = data['candles'][-1]
-                self.callback(candle)
-
-        def on_open(ws):
-            print("[DEBUG] WebSocket connection opened.")
-            request = {
-                "subscribe": 1,
-                "candles": self.symbol,
-                "style": "candles",
-                "granularity": 60
+    def _on_message(self, ws, message):
+        data = json.loads(message)
+        if data.get("msg_type") == "ohlc":
+            ohlc = data["ohlc"]
+            candle = {
+                "timestamp": datetime.fromtimestamp(ohlc["epoch"]),
+                "open": float(ohlc["open"]),
+                "high": float(ohlc["high"]),
+                "low": float(ohlc["low"]),
+                "close": float(ohlc["close"]),
             }
-            ws.send(json.dumps(request))
+            self.on_candle_callback(candle)
 
+    def _on_error(self, ws, error):
+        print(f"[ERROR] WebSocket error: {error}")
+
+    def _on_close(self, ws, close_status_code, close_msg):
+        print("[INFO] WebSocket closed")
+
+    def _on_open(self, ws):
+        request = {
+            "ticks_history": self.symbol,
+            "end": "latest",
+            "count": 1,
+            "granularity": self.granularity,
+            "style": "candles",
+            "subscribe": 1
+        }
+        ws.send(json.dumps(request))
+
+    def start(self):
+        websocket.enableTrace(False)
         self.ws = websocket.WebSocketApp(
-            "wss://ws.derivws.com/websockets/v3",
-            on_open=on_open,
-            on_message=on_message
+            "wss://ws.binaryws.com/websockets/v3?app_id=1089",
+            on_open=self._on_open,
+            on_message=self._on_message,
+            on_error=self._on_error,
+            on_close=self._on_close
         )
-        self.ws.run_forever()
+        thread = threading.Thread(target=self.ws.run_forever)
+        thread.daemon = True
+        thread.start()
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            print("Stopped by user.")
+# self.ws.close()

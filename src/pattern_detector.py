@@ -1,39 +1,27 @@
-# pattern_detector.py
-
 def detect_crt_pattern(candles):
-    patterns = []
-    labels = []
+    signals = []
     if len(candles) < 3:
-        return patterns, labels
+        return signals
+    last = candles[-1]
+    prev1 = candles[-2]
+    prev2 = candles[-3]
 
-    for i in range(2, len(candles)):
-        c1 = candles[i - 2]
-        c2 = candles[i - 1]
-        c3 = candles[i]
+    if last["close"] > prev1["close"] and last["close"] > prev2["close"]:
+        signals.append({"index": len(candles) - 1, "signal": "buy"})
+    elif last["close"] < prev1["close"] and last["close"] < prev2["close"]:
+        signals.append({"index": len(candles) - 1, "signal": "sell"})
 
-        # Detect a simple Accumulation → Manipulation → Distribution pattern
-        if (
-            c1["high"] - c1["low"] < 2  # low range
-            and c2["high"] > c1["high"] + 1  # manipulation up
-            and c3["close"] < c1["low"]  # distribution closes low
-        ):
-            entry = c3["close"]
-            sl = c2["high"]
-            tp = entry - (sl - entry) * 2
+    return signals
 
-            patterns.append(
-                {
-                    "time": c3["epoch"],
-                    "entry": entry,
-                    "sl": sl,
-                    "tp": tp,
-                    "direction": "sell",
-                }
-            )
+def predict_direction(candles):
+    if len(candles) < 3:
+        return None
+    last = candles[-1]
+    prev1 = candles[-2]
+    prev2 = candles[-3]
 
-            # record labels with index and phase name
-            labels.append((i - 2, "ACCUMULATION"))
-            labels.append((i - 1, "MANIPULATION"))
-            labels.append((i, "DISTRIBUTION"))
-
-    return patterns, labels
+    if last["close"] > prev1["close"] > prev2["close"]:
+        return "buy"
+    elif last["close"] < prev1["close"] < prev2["close"]:
+        return "sell"
+    return None

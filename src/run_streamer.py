@@ -1,109 +1,140 @@
-# run_streamer.py
-
-from deriv_ws import DerivLiveStreamer
-from live_plot import LiveCandlePlot
-from pattern_detector import detect_crt_pattern, predict_direction
-from strategy import calculate_levels
+import asyncio
 import datetime
-import math
-import threading
-import matplotlib.pyplot as plt
-from matplotlib.animation import FuncAnimation
+import websockets
+import json
 
-CANDLE_SECONDS_1H = 3600
-CANDLE_SECONDS_4H = 3600 * 4
+APP_ID = 80707
+SYMBOLS = ["R_10", "R_25", "R_50", "R_75", "R_100"]
+URL = f"wss://ws.binaryws.com/websockets/v3?app_id={APP_ID}"
 
-symbols = [
-    "R_10", "R_25", "R_50", "R_75", "R_100",
-    "R_10_1s", "R_25_1s", "R_50_1s", "R_75_1s", "R_100_1s"
-]
+REWARD_RATIO = 4
+MAX_SL_PERCENTAGE = 0.0025  # Max 0.25% risk
+LOOKBACK_CANDLES = 4  # Number of candles to analyze for pattern
 
-candles_by_symbol = {}
-signals_by_symbol = {}
+# Store candles history per symbol (for 4H timeframe)
+candles_history = {symbol: [] for symbol in SYMBOLS}
 
-class CRTTracker:
-    def __init__(self, symbol):
-        self.symbol = symbol
-        self.final_candles = []
-        self.forming_candle = None
-        self.signal_given_for_4h_epoch = None
+def epoch_to_local_candle_time(epoch, granularity):
+    dt = datetime.datetime.fromtimestamp(epoch).astimezone()
+    if granularity == 14400:  # 4H
+        hour = (dt.hour // 4) * 4
+        return dt.replace(hour=hour, minute=0, second=0, microsecond=0)
+    return dt
 
-    def create_new_candle(self, epoch):
-        start = epoch - (epoch % CANDLE_SECONDS_1H)
-        print(f"🟢 [{self.symbol}] New 1H candle @ {datetime.datetime.fromtimestamp(start)}")
-        return {
-            "epoch": start,
-            "open": None,
-            "high": -math.inf,
-            "low": math.inf,
-            "close": None,
-        }
+def add_new_candle(symbol, candle_start, open_p):
+    candles_history[symbol].append({
+        "start": candle_start,
+        "open": open_p,
+        "high": open_p,
+        "low": open_p,
+        "close": open_p,
+        "signaled": False,
+        "entry_sent": False,
+        "signal_time": None,
+    })
+    # Keep only recent N candles
+    if len(candles_history[symbol]) > 100:
+        candles_history[symbol].pop(0)
 
-    def update_forming_candle(self, candle):
-        ts = candle["epoch"]
-        if not self.forming_candle or ts >= self.forming_candle["epoch"] + CANDLE_SECONDS_1H:
-            if self.forming_candle and self.forming_candle["open"] is not None:
-                self.final_candles.append(self.forming_candle)
-                if len(self.final_candles) > 50:
-                    self.final_candles.pop(0)
-            self.forming_candle = self.create_new_candle(ts)
+def update_current_candle(symbol, price):
+    candle = candles_history[symbol][-1]
+    if price > candle["high"]:
+        candle["high"] = price
+    if price < candle["low"]:
+        candle["low"] = price
+    candle["close"] = price
 
-        price = candle["close"]
-        self.forming_candle["open"] = self.forming_candle["open"] or price
-        self.forming_candle["high"] = max(self.forming_candle["high"], candle["high"])
-        self.forming_candle["low"] = min(self.forming_candle["low"], candle["low"])
-        self.forming_candle["close"] = price
+def get_last_candles(symbol, n):
+    return candles_history[symbol][-n:] if len(candles_history[symbol]) >= n else []
 
-        self.check_for_signal()
+def predict_direction(candles):
+    """
+    Simple CRT-inspired pattern:
+    - Check if last 3 candles show accumulation and then breakout sign
+    - For demonstration, if last candle closes higher than open => buy signal
+    - If closes lower => sell signal
+    - Could be extended with more complex logic
+    """
+    if len(candles) < 3:
+        return None
 
-    def is_4h_candle_start_local(self, epoch_utc):
-        dt_local = datetime.datetime.utcfromtimestamp(epoch_utc) + datetime.timedelta(hours=2)
-        return dt_local.hour % 4 == 2 and dt_local.minute == 0 and dt_local.second == 0
+    c1, c2, c3 = candles[-3], candles[-2], candles[-1]
 
-    def check_for_signal(self):
-        if len(self.final_candles) < 3 or not self.forming_candle:
-            return
+    # Example pattern:
+    # Accumulation: small bodies c1 and c2 (body < threshold)
+    # Then breakout candle c3 with big body and direction
+    body1 = abs(c1["close"] - c1["open"]) / c1["open"]
+    body2 = abs(c2["close"] - c2["open"]) / c2["open"]
+    body3 = abs(c3["close"] - c3["open"]) / c3["open"]
 
-        forming_epoch = self.forming_candle["epoch"]
-        candle_4h_start_epoch = forming_epoch - (forming_epoch % CANDLE_SECONDS_4H)
+    SMALL_BODY = 0.001  # 0.1%
+    BIG_BODY = 0.0025   # 0.25%
 
-        if self.is_4h_candle_start_local(candle_4h_start_epoch):
-            if self.signal_given_for_4h_epoch != candle_4h_start_epoch:
-                direction = predict_direction(self.final_candles)
-                signal = detect_crt_pattern(self.final_candles)
-                if signal:
-                    last = self.final_candles[-1]
-                    levels = calculate_levels(last, direction)
-                    emoji = "📈" if direction == "buy" else "📉"
-                    msg = f"{emoji} {self.symbol} {direction.upper()} SIGNAL | Entry: {levels['entry']:.2f}, TP: {levels['tp']:.2f}, SL: {levels['sl']:.2f}"
-                    print(f"[CRT SIGNAL] {msg}")
+    if body1 < SMALL_BODY and body2 < SMALL_BODY and body3 > BIG_BODY:
+        return "buy" if c3["close"] > c3["open"] else "sell"
+
+    return None
+
+async def run():
+    print("🚀 Starting sniper entry CRT tracker with prediction 30s before 4H candle move...")
+
+    async with websockets.connect(URL) as ws:
+        # Subscribe to ticks
+        for symbol in SYMBOLS:
+            await ws.send(json.dumps({"ticks": symbol, "subscribe": 1}))
+            print(f"✅ Subscribed to ticks for {symbol}")
+
+        while True:
+            msg = await ws.recv()
+            data = json.loads(msg)
+
+            if 'tick' in data:
+                tick = data['tick']
+                symbol = tick['symbol']
+                price = tick['quote']
+                epoch = tick['epoch']
+
+                candle_start = epoch_to_local_candle_time(epoch, 14400)
+
+                # New candle started?
+                if not candles_history[symbol] or candles_history[symbol][-1]["start"] != candle_start:
+                    add_new_candle(symbol, candle_start, price)
+                    print(f"🕓 New 4H candle started for {symbol} at {candle_start}")
+
                 else:
-                    print(f"❌ {self.symbol}: No signal for this 4H candle.")
-                self.signal_given_for_4h_epoch = candle_4h_start_epoch
-        else:
-            self.signal_given_for_4h_epoch = None
+                    update_current_candle(symbol, price)
 
+                current_candle = candles_history[symbol][-1]
 
-def start_stream(symbol):
-    tracker = CRTTracker(symbol)
-    candles_by_symbol[symbol] = tracker
+                now = datetime.datetime.now(datetime.timezone.utc).astimezone()
+                seconds_after_open = (now - candle_start).total_seconds()
 
-    def on_candle(candle):
-        print(f"📥 {symbol} 1-min @ {datetime.datetime.fromtimestamp(candle['epoch'])} | Close: {candle['close']}")
-        tracker.update_forming_candle(candle)
+                # We want to send sniper entry signal approx 30 seconds after candle open, before big moves
+                if 25 <= seconds_after_open <= 35 and not current_candle["entry_sent"]:
+                    # Predict direction using last candles except current incomplete candle
+                    past_candles = get_last_candles(symbol, LOOKBACK_CANDLES + 1)[:-1]  # exclude current candle
+                    direction = predict_direction(past_candles)
 
-    DerivLiveStreamer(app_id="80707", symbol=symbol, granularity=60, callback=on_candle).start()
+                    if direction is not None:
+                        entry = current_candle["open"]
+                        if direction == "buy":
+                            sl = entry * (1 - MAX_SL_PERCENTAGE)
+                            tp = entry + REWARD_RATIO * (entry - sl)
+                        else:
+                            sl = entry * (1 + MAX_SL_PERCENTAGE)
+                            tp = entry - REWARD_RATIO * (sl - entry)
 
+                        risk = abs(entry - sl)
+                        if risk <= entry * MAX_SL_PERCENTAGE:
+                            current_candle["entry_sent"] = True
+                            print(f"\n🔫 [{symbol}] SNIPER ENTRY SIGNAL ({direction.upper()}) 30s after candle open")
+                            print(f"🕓 Candle Start: {candle_start.strftime('%Y-%m-%d %H:%M:%S')}")
+                            print(f"🎯 Entry: {entry:.2f}")
+                            print(f"🛑 Stop Loss: {sl:.2f}")
+                            print(f"✅ Take Profit: {tp:.2f}\n")
+
+            elif 'error' in data:
+                print("❌ Error:", data['error'].get('message'))
 
 if __name__ == "__main__":
-    for sym in symbols:
-        threading.Thread(target=start_stream, args=(sym,), daemon=True).start()
-
-    print("\n✅ All volatility index streams running...")
-
-    while True:
-        try:
-            pass
-        except KeyboardInterrupt:
-            print("\nStopping...")
-            break
+    asyncio.run(run())

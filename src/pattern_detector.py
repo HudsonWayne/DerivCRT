@@ -1,27 +1,49 @@
-def detect_crt_pattern(candles):
-    signals = []
-    if len(candles) < 3:
+class CRTStrategy:
+    def __init__(self, candles):
+        self.candles = candles
+
+    def run(self):
+        signals = []
+        if len(self.candles) < 5:
+            return [{"description": "No valid setup", "type": "none"}]
+
+        c1, c2, c3 = self.candles[-3:]
+        direction = None
+
+        # 🔍 Detect long CRT (Accumulation → Manipulation → Expansion)
+        if c2['low'] < c1['low'] and c2['low'] < c3['low'] and c3['close'] > c1['open']:
+            direction = 'buy'
+        elif c2['high'] > c1['high'] and c2['high'] > c3['high'] and c3['close'] < c1['open']:
+            direction = 'sell'
+
+        # ✅ Breakout Pattern: Big candle after tight range
+        if not direction:
+            body_sizes = [abs(c['close'] - c['open']) for c in self.candles[-5:]]
+            avg = sum(body_sizes[:-1]) / 4
+            if body_sizes[-1] > 1.8 * avg:
+                direction = 'buy' if self.candles[-1]['close'] > self.candles[-1]['open'] else 'sell'
+
+        if direction:
+            level = self.calculate_levels(self.candles[-1], direction)
+            signals.append({
+                "entry_index": len(self.candles) - 1,
+                "entry_price": level['entry'],
+                "tp_price": level['tp'],
+                "sl_price": level['sl'],
+                "type": direction,
+                "description": "CRT Long Trade" if direction else "Breakout",
+            })
+        else:
+            signals.append({"description": "No valid setup", "type": "none"})
         return signals
-    last = candles[-1]
-    prev1 = candles[-2]
-    prev2 = candles[-3]
 
-    if last["close"] > prev1["close"] and last["close"] > prev2["close"]:
-        signals.append({"index": len(candles) - 1, "signal": "buy"})
-    elif last["close"] < prev1["close"] and last["close"] < prev2["close"]:
-        signals.append({"index": len(candles) - 1, "signal": "sell"})
-
-    return signals
-
-def predict_direction(candles):
-    if len(candles) < 3:
-        return None
-    last = candles[-1]
-    prev1 = candles[-2]
-    prev2 = candles[-3]
-
-    if last["close"] > prev1["close"] > prev2["close"]:
-        return "buy"
-    elif last["close"] < prev1["close"] < prev2["close"]:
-        return "sell"
-    return None
+    def calculate_levels(self, candle, direction):
+        entry = candle["close"]
+        buffer = (candle["high"] - candle["low"]) * 0.2
+        if direction == "buy":
+            sl = entry - buffer
+            tp = entry + buffer * 2
+        else:
+            sl = entry + buffer
+            tp = entry - buffer * 2
+        return {"entry": entry, "sl": sl, "tp": tp}
